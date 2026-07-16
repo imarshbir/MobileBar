@@ -1,22 +1,39 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import { Product } from '@/types';
+import { Product, Category, Brand } from '@/types';
 import { useToast } from '@/components/Toast';
 import Loader from '@/components/Loader';
 
 const formatPrice = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
+// The "-X% OFF" badge is always computed from the admin's two rupee
+// inputs (price + discount_amount) — never entered directly, so it can
+// never drift out of sync with the actual numbers.
+const computeDiscountPercent = (price: number, discountAmount: number) => {
+  const compareAt = price + discountAmount;
+  if (discountAmount <= 0 || compareAt <= 0) return 0;
+  return Math.round((discountAmount / compareAt) * 100);
+};
+
 const emptyForm = {
-  brand: '',
-  model_name: '',
+  name: '',
+  category_id: '',
+  brand_id: '',
   description: '',
-  ram_gb: 8,
-  storage_gb: 128,
+  features: '',
+  whats_included: '',
+  compatible_models: '',
+  material: '',
+  finish: '',
   color: '',
-  processor: '',
   price: 0,
+  discount_amount: 0,
   stock_quantity: 0,
+  video_url: '',
+  is_new_arrival: false,
+  is_best_seller: false,
+  is_featured: false,
   is_active: true,
 };
 
@@ -26,9 +43,13 @@ function stockBadge(qty: number) {
   return { label: 'In Stock', cls: 'bg-primary/10 text-primary' };
 }
 
+const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+
 export default function AdminProducts() {
   const { push } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -38,24 +59,28 @@ export default function AdminProducts() {
   const [existingImages, setExistingImages] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const loadProducts = async () => {
+  const loadAll = async () => {
     setLoading(true);
-    const { data } = await supabase.from('products').select('*').order('created_at', { ascending: false });
-    setProducts((data as Product[]) ?? []);
+    const [{ data: prods }, { data: cats }, { data: brs }] = await Promise.all([
+      supabase.from('products').select('*, category:categories(*), brand:brands(*)').order('created_at', { ascending: false }),
+      supabase.from('categories').select('*').order('display_order'),
+      supabase.from('brands').select('*').order('display_order'),
+    ]);
+    setProducts((prods as Product[]) ?? []);
+    setCategories((cats as Category[]) ?? []);
+    setBrands((brs as Brand[]) ?? []);
     setLoading(false);
   };
 
   useEffect(() => {
-    loadProducts();
+    loadAll();
   }, []);
 
-  const filtered = products.filter((p) =>
-    `${p.brand} ${p.model_name}`.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = products.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()));
 
   const openCreate = () => {
     setEditingId(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, category_id: categories[0]?.id ?? '' });
     setExistingImages([]);
     setImageFiles([]);
     setModalOpen(true);
@@ -64,15 +89,23 @@ export default function AdminProducts() {
   const openEdit = (p: Product) => {
     setEditingId(p.id);
     setForm({
-      brand: p.brand,
-      model_name: p.model_name,
+      name: p.name,
+      category_id: p.category_id,
+      brand_id: p.brand_id ?? '',
       description: p.description,
-      ram_gb: p.ram_gb,
-      storage_gb: p.storage_gb,
+      features: p.features.join(', '),
+      whats_included: p.whats_included.join(', '),
+      compatible_models: p.compatible_models.join(', '),
+      material: p.material,
+      finish: p.finish,
       color: p.color,
-      processor: p.processor,
       price: p.price,
+      discount_amount: p.discount_amount,
       stock_quantity: p.stock_quantity,
+      video_url: p.video_url,
+      is_new_arrival: p.is_new_arrival,
+      is_best_seller: p.is_best_seller,
+      is_featured: p.is_featured,
       is_active: p.is_active,
     });
     setExistingImages(p.image_urls ?? []);
@@ -96,14 +129,41 @@ export default function AdminProducts() {
   };
 
   const handleSave = async () => {
-    if (!form.brand.trim() || !form.model_name.trim()) {
-      push('Brand and model name are required.', 'error');
+    if (!form.name.trim() || !form.category_id) {
+      push('Product name and category are required.', 'error');
+      return;
+    }
+    if (form.price <= 0) {
+      push('Enter a selling price greater than 0.', 'error');
+      return;
+    }
+    if (form.discount_amount < 0) {
+      push('Discount amount cannot be negative.', 'error');
       return;
     }
     setSaving(true);
     const newUrls = await uploadImages();
-    const image_urls = [...existingImages, ...newUrls];
-    const payload = { ...form, image_urls };
+    const payload = {
+      name: form.name.trim(),
+      category_id: form.category_id,
+      brand_id: form.brand_id || null,
+      description: form.description,
+      features: csv(form.features),
+      whats_included: csv(form.whats_included),
+      compatible_models: csv(form.compatible_models),
+      material: form.material,
+      finish: form.finish,
+      color: form.color,
+      price: form.price,
+      discount_amount: form.discount_amount,
+      stock_quantity: form.stock_quantity,
+      video_url: form.video_url,
+      is_new_arrival: form.is_new_arrival,
+      is_best_seller: form.is_best_seller,
+      is_featured: form.is_featured,
+      is_active: form.is_active,
+      image_urls: [...existingImages, ...newUrls],
+    };
 
     const { error } = editingId
       ? await supabase.from('products').update(payload).eq('id', editingId)
@@ -116,7 +176,7 @@ export default function AdminProducts() {
     }
     push(editingId ? 'Product updated.' : 'Product listed.', 'success');
     setModalOpen(false);
-    loadProducts();
+    loadAll();
   };
 
   const handleDelete = async (id: string) => {
@@ -127,13 +187,15 @@ export default function AdminProducts() {
       return;
     }
     push('Product deleted.', 'success');
-    loadProducts();
+    loadAll();
   };
 
   const toggleActive = async (p: Product) => {
     await supabase.from('products').update({ is_active: !p.is_active }).eq('id', p.id);
-    loadProducts();
+    loadAll();
   };
+
+  const previewPercent = computeDiscountPercent(form.price, form.discount_amount);
 
   return (
     <div>
@@ -159,12 +221,12 @@ export default function AdminProducts() {
       {loading ? (
         <Loader label="Loading inventory" />
       ) : (
-        <div className="mt-6 overflow-hidden rounded-lg border border-border-soft bg-white shadow-1">
+        <div className="mt-6 overflow-x-auto rounded-lg border border-border-soft bg-white shadow-1">
           <table className="w-full text-left text-body-md">
             <thead className="bg-surface-container-low text-caption uppercase tracking-wide text-on-surface-variant">
               <tr>
                 <th className="px-4 py-3">Product</th>
-                <th className="px-4 py-3">Specs</th>
+                <th className="px-4 py-3">Category</th>
                 <th className="px-4 py-3">Price</th>
                 <th className="px-4 py-3">Stock</th>
                 <th className="px-4 py-3">Status</th>
@@ -174,20 +236,27 @@ export default function AdminProducts() {
             <tbody className="divide-y divide-border-soft">
               {filtered.map((p) => {
                 const badge = stockBadge(p.stock_quantity);
+                const pct = computeDiscountPercent(p.price, p.discount_amount);
                 return (
                   <tr key={p.id} className="text-on-surface">
                     <td className="flex items-center gap-3 px-4 py-3">
                       <div className="h-10 w-10 overflow-hidden rounded-md bg-surface-container-low">
                         {p.image_urls?.[0] && <img src={p.image_urls[0]} className="h-full w-full object-cover" alt="" />}
                       </div>
-                      <span className="text-label-sm font-medium">
-                        {p.brand} {p.model_name}
-                      </span>
+                      <span className="text-label-sm font-medium">{p.name}</span>
                     </td>
-                    <td className="px-4 py-3 text-caption text-on-surface-variant">
-                      {p.ram_gb}GB / {p.storage_gb}GB
+                    <td className="px-4 py-3 text-caption text-on-surface-variant">{p.category?.name}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold">{formatPrice(p.price)}</span>
+                        {p.discount_amount > 0 && (
+                          <>
+                            <span className="text-caption text-outline line-through">{formatPrice(p.compare_at_price)}</span>
+                            <span className="rounded-full bg-error/10 px-1.5 py-0.5 text-[10px] font-semibold text-error">-{pct}%</span>
+                          </>
+                        )}
+                      </div>
                     </td>
-                    <td className="px-4 py-3 font-semibold">{formatPrice(p.price)}</td>
                     <td className="px-4 py-3">{p.stock_quantity}</td>
                     <td className="px-4 py-3">
                       <button
@@ -218,37 +287,47 @@ export default function AdminProducts() {
 
       {modalOpen && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-secondary/50 p-4" onClick={() => setModalOpen(false)}>
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-6 shadow-3" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-6 shadow-3" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-headline-md !text-lg text-on-surface">{editingId ? 'Edit product' : 'Add product'}</h2>
 
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-caption text-on-surface-variant">Brand</label>
-                <input className="input-field bg-white" value={form.brand} onChange={(e) => setForm((f) => ({ ...f, brand: e.target.value }))} />
+              <div className="col-span-2">
+                <label className="mb-1 block text-caption text-on-surface-variant">Product Name</label>
+                <input className="input-field bg-white" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
               </div>
               <div>
-                <label className="mb-1 block text-caption text-on-surface-variant">Model name</label>
-                <input className="input-field bg-white" value={form.model_name} onChange={(e) => setForm((f) => ({ ...f, model_name: e.target.value }))} />
+                <label className="mb-1 block text-caption text-on-surface-variant">Category</label>
+                <select className="input-field bg-white" value={form.category_id} onChange={(e) => setForm((f) => ({ ...f, category_id: e.target.value }))}>
+                  <option value="">Select category</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
-                <label className="mb-1 block text-caption text-on-surface-variant">RAM (GB)</label>
-                <input type="number" className="input-field bg-white" value={form.ram_gb} onChange={(e) => setForm((f) => ({ ...f, ram_gb: Number(e.target.value) }))} />
+                <label className="mb-1 block text-caption text-on-surface-variant">Brand (optional)</label>
+                <select className="input-field bg-white" value={form.brand_id} onChange={(e) => setForm((f) => ({ ...f, brand_id: e.target.value }))}>
+                  <option value="">None</option>
+                  {brands.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
-                <label className="mb-1 block text-caption text-on-surface-variant">Storage (GB)</label>
-                <input type="number" className="input-field bg-white" value={form.storage_gb} onChange={(e) => setForm((f) => ({ ...f, storage_gb: Number(e.target.value) }))} />
+                <label className="mb-1 block text-caption text-on-surface-variant">Material</label>
+                <input className="input-field bg-white" value={form.material} onChange={(e) => setForm((f) => ({ ...f, material: e.target.value }))} />
+              </div>
+              <div>
+                <label className="mb-1 block text-caption text-on-surface-variant">Finish</label>
+                <input className="input-field bg-white" value={form.finish} onChange={(e) => setForm((f) => ({ ...f, finish: e.target.value }))} />
               </div>
               <div>
                 <label className="mb-1 block text-caption text-on-surface-variant">Color</label>
                 <input className="input-field bg-white" value={form.color} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} />
-              </div>
-              <div>
-                <label className="mb-1 block text-caption text-on-surface-variant">Processor</label>
-                <input className="input-field bg-white" value={form.processor} onChange={(e) => setForm((f) => ({ ...f, processor: e.target.value }))} />
-              </div>
-              <div>
-                <label className="mb-1 block text-caption text-on-surface-variant">Price (₹)</label>
-                <input type="number" className="input-field bg-white" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: Number(e.target.value) }))} />
               </div>
               <div>
                 <label className="mb-1 block text-caption text-on-surface-variant">Stock quantity</label>
@@ -261,14 +340,103 @@ export default function AdminProducts() {
               </div>
             </div>
 
+            {/* Pricing — the actual selling price plus an optional flat
+                discount amount. The "% off" badge below is computed
+                live from these two numbers, never entered separately. */}
+            <div className="mt-4 rounded-lg border border-border-soft bg-surface-container-low p-4">
+              <p className="mb-3 flex items-center gap-1.5 text-label-sm font-semibold text-on-surface">
+                <span className="material-symbols-outlined !text-base text-primary">payments</span>
+                Pricing
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-caption text-on-surface-variant">Selling Price (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-field bg-white"
+                    value={form.price}
+                    onChange={(e) => setForm((f) => ({ ...f, price: Number(e.target.value) }))}
+                  />
+                  <p className="mt-1 text-caption text-on-surface-variant">The exact amount you receive per sale.</p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-caption text-on-surface-variant">Discount Amount (₹, optional)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-field bg-white"
+                    value={form.discount_amount}
+                    onChange={(e) => setForm((f) => ({ ...f, discount_amount: Number(e.target.value) }))}
+                    placeholder="0"
+                  />
+                  <p className="mt-1 text-caption text-on-surface-variant">Added on top to show a crossed-out price.</p>
+                </div>
+              </div>
+
+              {form.discount_amount > 0 && form.price > 0 && (
+                <div className="mt-3 flex items-center gap-2 rounded-lg bg-white p-3">
+                  <span className="text-caption text-on-surface-variant">Customers will see:</span>
+                  <span className="text-label-sm text-outline line-through">{formatPrice(form.price + form.discount_amount)}</span>
+                  <span className="text-label-sm font-bold text-on-surface">{formatPrice(form.price)}</span>
+                  <span className="rounded-full bg-error/10 px-2 py-0.5 text-caption font-semibold text-error">-{previewPercent}% OFF</span>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3">
+              <label className="mb-1 block text-caption text-on-surface-variant">Compatible Models (comma-separated)</label>
+              <input
+                className="input-field bg-white"
+                value={form.compatible_models}
+                onChange={(e) => setForm((f) => ({ ...f, compatible_models: e.target.value }))}
+                placeholder="iPhone 15, iPhone 15 Pro"
+              />
+            </div>
+
             <div className="mt-3">
               <label className="mb-1 block text-caption text-on-surface-variant">Description</label>
               <textarea
                 className="input-field resize-none bg-white"
-                rows={3}
+                rows={2}
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               />
+            </div>
+
+            <div className="mt-3">
+              <label className="mb-1 block text-caption text-on-surface-variant">Features (comma-separated)</label>
+              <input className="input-field bg-white" value={form.features} onChange={(e) => setForm((f) => ({ ...f, features: e.target.value }))} />
+            </div>
+
+            <div className="mt-3">
+              <label className="mb-1 block text-caption text-on-surface-variant">What's Included (comma-separated)</label>
+              <input className="input-field bg-white" value={form.whats_included} onChange={(e) => setForm((f) => ({ ...f, whats_included: e.target.value }))} />
+            </div>
+
+            <div className="mt-3">
+              <label className="mb-1 block text-caption text-on-surface-variant">Product Video URL (optional)</label>
+              <input className="input-field bg-white" value={form.video_url} onChange={(e) => setForm((f) => ({ ...f, video_url: e.target.value }))} placeholder="https://…mp4" />
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-4">
+              {(
+                [
+                  ['is_new_arrival', 'New Arrival'],
+                  ['is_best_seller', 'Best Seller'],
+                  ['is_featured', 'Featured'],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-label-sm text-on-surface">
+                  <input
+                    type="checkbox"
+                    checked={form[key]}
+                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.checked }))}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  {label}
+                </label>
+              ))}
             </div>
 
             <div className="mt-3">

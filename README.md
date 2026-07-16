@@ -1,7 +1,21 @@
 # Mobile Bar
 
-A production-structured mobile phone e-commerce platform. React + TypeScript + Tailwind on the
-frontend, Supabase (Postgres + Auth + Storage + Row Level Security) on the backend.
+> **Stage 1 of 3 — Catalog & Content Rebuild.** This pivots Mobile Bar from a phones-only
+> store to a multi-category accessories marketplace (covers, skins, tempered glass, watch
+> straps, charger covers, cable protectors), per the company's sitemap and content
+> documents. **Stage 2** (cart/wishlist/coupon UI polish, saved addresses) and **Stage 3**
+> (Razorpay payment integration + Excel admin exports) are planned as separate follow-ups.
+>
+> **The database schema changed.** `supabase/schema.sql` now defines `categories`,
+> `brands`, and a generalized `products` table (replacing the old phone-specific
+> `ram_gb`/`storage_gb`/`processor` columns). If you're running this against an existing
+> Supabase project, re-run the full `schema.sql` — it will drop and rebuild the affected
+> columns. Existing orders referencing old product rows will need those products
+> re-created under the new schema; for a live store, export orders first.
+
+A production-structured multi-category accessories e-commerce platform. React + TypeScript
++ Tailwind on the frontend, Supabase (Postgres + Auth + Storage + Row Level Security) on
+the backend.
 
 ## 1. Prerequisites
 
@@ -144,10 +158,57 @@ supabase/
   password), enable email confirmation if you haven't already, and consider adding
   Supabase's CAPTCHA integration on the auth forms.
 
-## 9. What's stubbed for you to extend
+## 9. Payment gateway (Razorpay) — Stage 3, not yet wired in
 
-- Payment gateway — checkout currently places a cash-on-delivery style order; swap
-  `Checkout.tsx`'s submit handler for Razorpay/Stripe once you're ready.
-- Email notifications on order status change (Supabase Edge Functions + Resend/SendGrid
-  is a natural fit).
+Checkout currently places a cash-on-delivery style order via the `place_order()` database
+function. Real payment integration is scoped as **Stage 3** because it needs your Razorpay
+merchant account credentials first — here's exactly what to request from your company and
+where it plugs in once you have it:
+
+**What to ask them for:**
+- Razorpay **Key ID** and **Key Secret** (Dashboard → Settings → API Keys) — start with
+  **Test Mode** keys so we can build and verify the flow without moving real money, then
+  swap to Live keys at launch.
+- Confirmation of which payment methods to enable in their Razorpay dashboard (UPI, cards,
+  netbanking, wallets — all are supported by one integration, no extra code per method).
+- The bank account Razorpay should settle payouts to (this is configured entirely on
+  Razorpay's side during their merchant KYC — never something this app touches directly).
+
+**Where the keys go — already reserved for you:**
+```
+# .env (frontend — safe to expose, this is a public identifier, not a secret)
+VITE_RAZORPAY_KEY_ID=
+
+# Server-side only (Supabase Edge Function secrets, NOT .env) — never put this in
+# frontend code or an env var prefixed VITE_, since anything VITE_-prefixed ships
+# to the browser. Set via: supabase secrets set RAZORPAY_KEY_SECRET=xxx
+RAZORPAY_KEY_SECRET=
+```
+
+**How the integration will work once keys are supplied** (standard, PCI-compliant pattern
+— this app never touches raw card or bank details, Razorpay's hosted checkout does):
+1. Customer clicks "Place Order" → a Supabase Edge Function calls Razorpay's API to create
+   an order (server-side, using `RAZORPAY_KEY_SECRET`).
+2. Frontend opens Razorpay's Checkout.js with that order ID — this is Razorpay's own
+   secure payment sheet (UPI/card/netbanking/wallet selection happens inside it).
+3. On success, Razorpay signs a payment confirmation; a webhook (another Edge Function)
+   verifies that signature and flips the order's `payment_status` to `paid` in the
+   `orders` table — columns `razorpay_order_id`, `razorpay_payment_id`, and
+   `payment_status` already exist in the schema, ready for this.
+4. If payment fails or is abandoned, the order stays `pending` and stock isn't
+   double-deducted (already handled — `place_order()` only decrements stock once, at
+   order creation, same as today).
+
+Once you have Test Mode keys, send them over and this becomes a same-day addition — the
+schema and UI touchpoints are already in place, it's the two Edge Functions (create-order,
+verify-webhook) plus the Checkout.js call that remain.
+
+## 10. Other stubs for you to extend
+
+- Email notifications on order status change (Supabase Edge Functions + Resend/SendGrid is
+  a natural fit — you already have Resend configured for auth emails).
 - Image optimization/CDN — images upload as-is to Supabase Storage.
+- Excel report exports (Sale Sheet / Customer Detail Report) — planned for Stage 3
+  alongside payments; the `orders` table already carries every column your
+  `Sale_sheet.xlsx` template needs (GST breakdown, coupon discount, etc.) so the export is
+  a formatting layer over existing data, not a schema change.

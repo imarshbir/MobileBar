@@ -22,8 +22,9 @@ export default function Profile() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ full_name: '', shipping_address: '' });
+  const [form, setForm] = useState({ full_name: '', shipping_address: '', mobile_number: '' });
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session?.user) return;
@@ -39,19 +40,45 @@ export default function Profile() {
   }, [session?.user]);
 
   useEffect(() => {
-    if (profile) setForm({ full_name: profile.full_name, shipping_address: profile.shipping_address });
+    if (profile) {
+      setForm({
+        full_name: profile.full_name,
+        shipping_address: profile.shipping_address,
+        mobile_number: profile.mobile_number ?? '',
+      });
+    }
   }, [profile]);
+
+  const MOBILE_RE = /^[0-9+][0-9 -]{6,14}$/;
 
   const saveProfile = async () => {
     if (!session?.user) return;
+    setFormError(null);
+
+    const trimmedMobile = form.mobile_number.trim();
+    if (trimmedMobile && !MOBILE_RE.test(trimmedMobile)) {
+      setFormError('Enter a valid mobile number, or leave it blank.');
+      return;
+    }
+
     setSaving(true);
     const { error } = await supabase
       .from('profiles')
-      .update({ full_name: form.full_name.trim(), shipping_address: form.shipping_address.trim() })
+      .update({
+        full_name: form.full_name.trim(),
+        shipping_address: form.shipping_address.trim(),
+        mobile_number: trimmedMobile || null,
+      })
       .eq('id', session.user.id);
     setSaving(false);
     if (error) {
-      push('Could not update profile.', 'error');
+      // Most likely cause: that number is already used by another account
+      // (mobile_number is UNIQUE) — surface that plainly instead of a
+      // generic failure.
+      const msg = error.message.includes('duplicate') || error.code === '23505'
+        ? 'That mobile number is already linked to another account.'
+        : 'Could not update profile.';
+      push(msg, 'error');
       return;
     }
     await refreshProfile();
@@ -86,6 +113,21 @@ export default function Profile() {
                 />
               </div>
               <div>
+                <label className="mb-1 block text-caption text-on-surface-variant">Mobile number</label>
+                <input
+                  className="input-field bg-white"
+                  value={form.mobile_number}
+                  onChange={(e) => setForm((f) => ({ ...f, mobile_number: e.target.value }))}
+                  placeholder="9876543210"
+                />
+              </div>
+              {formError && (
+                <p className="flex items-center gap-1.5 rounded-lg bg-error-container px-3 py-2 text-caption text-on-error-container">
+                  <span className="material-symbols-outlined !text-base">error</span>
+                  {formError}
+                </p>
+              )}
+              <div>
                 <label className="mb-1 block text-caption text-on-surface-variant">Shipping address</label>
                 <textarea
                   className="input-field resize-none bg-white"
@@ -107,7 +149,7 @@ export default function Profile() {
             <div className="mt-5 flex flex-col gap-3 text-body-md">
               <div>
                 <p className="text-caption text-on-surface-variant">Mobile number</p>
-                <p className="text-on-surface">{profile.mobile_number}</p>
+                <p className="text-on-surface">{profile.mobile_number || 'Not set'}</p>
               </div>
               <div>
                 <p className="text-caption text-on-surface-variant">Shipping address</p>

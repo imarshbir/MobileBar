@@ -7,8 +7,8 @@ interface CartContextValue {
   items: CartItem[];
   loading: boolean;
   addToCart: (productId: string, quantity?: number) => Promise<{ error: string | null }>;
-  updateQuantity: (cartItemId: string, quantity: number) => Promise<void>;
-  removeFromCart: (cartItemId: string) => Promise<void>;
+  updateQuantity: (productId: string, quantity: number) => Promise<{ error: string | null }>;
+  removeFromCart: (productId: string) => Promise<void>;
   clearCart: () => Promise<void>;
   totalItems: number;
   totalPrice: number;
@@ -40,35 +40,41 @@ export function CartProvider({ children }: { children: ReactNode }) {
     fetchCart();
   }, [fetchCart]);
 
+  // Uses the add_to_cart() Postgres function — a single atomic
+  // INSERT ... ON CONFLICT DO UPDATE — instead of reading local state
+  // to decide insert-vs-update. That old pattern had a real race: two
+  // rapid clicks (or two open tabs) could both see "not in cart yet"
+  // and both fire an insert, and the loser would get a raw unique-
+  // constraint error instead of their quantity just incrementing.
   const addToCart = async (productId: string, quantity = 1) => {
     if (!session?.user) return { error: 'not-authenticated' };
 
-    const existing = items.find((i) => i.product_id === productId);
-    if (existing) {
-      await updateQuantity(existing.id, existing.quantity + quantity);
-      return { error: null };
-    }
-
-    const { error } = await supabase
-      .from('cart_items')
-      .insert({ customer_id: session.user.id, product_id: productId, quantity });
+    const { error } = await supabase.rpc('add_to_cart', {
+      p_product_id: productId,
+      p_quantity: quantity,
+    });
 
     if (error) return { error: error.message };
     await fetchCart();
     return { error: null };
   };
 
-  const updateQuantity = async (cartItemId: string, quantity: number) => {
-    if (quantity < 1) {
-      await removeFromCart(cartItemId);
-      return;
-    }
-    await supabase.from('cart_items').update({ quantity }).eq('id', cartItemId);
+  // Uses set_cart_quantity() — also atomic, and collapses to a delete
+  // server-side when quantity < 1, so there's one code path instead of
+  // the caller having to branch between update and remove.
+  const updateQuantity = async (productId: string, quantity: number) => {
+    const { error } = await supabase.rpc('set_cart_quantity', {
+      p_product_id: productId,
+      p_quantity: quantity,
+    });
+    if (error) return { error: error.message };
     await fetchCart();
+    return { error: null };
   };
 
-  const removeFromCart = async (cartItemId: string) => {
-    await supabase.from('cart_items').delete().eq('id', cartItemId);
+  const removeFromCart = async (productId: string) => {
+    if (!session?.user) return;
+    await supabase.from('cart_items').delete().eq('customer_id', session.user.id).eq('product_id', productId);
     await fetchCart();
   };
 
@@ -79,7 +85,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   };
 
   const totalItems = items.reduce((sum, i) => sum + i.quantity, 0);
-  const totalPrice = items.reduce((sum, i) => sum + (i.product?.price ?? 0) * i.quantity, 0);
+  const totalPrice = items.reduce((sum, i) => sum + (i.product?.sale_price ?? 0) * i.quantity, 0);
 
   return (
     <CartContext.Provider

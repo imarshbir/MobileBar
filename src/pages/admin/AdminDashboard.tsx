@@ -106,9 +106,7 @@ export default function AdminDashboard() {
                       <div className="h-9 w-9 overflow-hidden rounded-md bg-surface-container-low">
                         {b.image_urls?.[0] && <img src={b.image_urls[0]} className="h-full w-full object-cover" alt="" />}
                       </div>
-                      <span className="text-label-sm">
-                        {b.brand} {b.model_name}
-                      </span>
+                      <span className="text-label-sm">{b.name}</span>
                     </td>
                     <td className="px-4 py-3 font-semibold text-primary">{b.units_sold_30d}</td>
                     <td className="px-4 py-3">{b.units_sold_all_time}</td>

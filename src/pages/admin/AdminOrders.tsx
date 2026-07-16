@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { Order, OrderStatus } from '@/types';
 import { useToast } from '@/components/Toast';
 import Loader from '@/components/Loader';
+import { exportOrdersToExcel } from '@/utils/exportOrders';
 
 const formatPrice = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -14,6 +15,7 @@ export default function AdminOrders() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [exporting, setExporting] = useState(false);
 
   const loadOrders = async () => {
     setLoading(true);
@@ -43,18 +45,34 @@ export default function AdminOrders() {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-headline-lg text-on-surface">Orders</h1>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-          className="input-field w-auto bg-white !py-2 text-label-sm"
-        >
-          <option value="all">All statuses</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s[0].toUpperCase() + s.slice(1)}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+            className="input-field w-auto bg-white !py-2 text-label-sm"
+          >
+            <option value="all">All statuses</option>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s[0].toUpperCase() + s.slice(1)}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => {
+              setExporting(true);
+              exportOrdersToExcel(orders, statusFilter === 'all' ? 'mobile-bar-sales' : `mobile-bar-sales-${statusFilter}`).finally(() =>
+                setExporting(false)
+              );
+            }}
+            disabled={orders.length === 0 || exporting}
+            className="btn-secondary"
+            title="Download an Excel report of the orders currently shown"
+          >
+            <span className="material-symbols-outlined !text-base">download</span>
+            {exporting ? 'Preparing…' : 'Export to Excel'}
+          </button>
+        </div>
       </div>
       <p className="mt-1 text-body-md text-on-surface-variant">Every incoming purchase, with delivery details.</p>
 

@@ -1,25 +1,40 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
 import { Product, ProductReview } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCart } from '@/contexts/CartContext';
+import { useWishlist } from '@/contexts/WishlistContext';
 import { useToast } from '@/components/Toast';
+import ProductCard from '@/components/ProductCard';
 import Loader from '@/components/Loader';
 
 const formatPrice = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
+
+// Same computation as ProductCard.tsx and AdminProducts.tsx — the
+// percent badge is always derived from price + discount_amount, never
+// stored as its own number, so it can never go out of sync.
+const computeDiscountPercent = (product: Product) => {
+  if (product.discount_amount <= 0 || product.compare_at_price <= 0) return 0;
+  return Math.round((product.discount_amount / product.compare_at_price) * 100);
+};
+
+type Tab = 'description' | 'delivery' | 'returns';
 
 export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { session } = useAuth();
   const { addToCart } = useCart();
+  const { isWishlisted, toggleWishlist } = useWishlist();
   const { push } = useToast();
 
   const [product, setProduct] = useState<Product | null>(null);
+  const [related, setRelated] = useState<Product[]>([]);
   const [reviews, setReviews] = useState<ProductReview[]>([]);
-  const [activeImage, setActiveImage] = useState(0);
+  const [activeMedia, setActiveMedia] = useState(0);
+  const [tab, setTab] = useState<Tab>('description');
   const [loading, setLoading] = useState(true);
   const [qty, setQty] = useState(1);
   const [reviewText, setReviewText] = useState('');
@@ -39,9 +54,23 @@ export default function ProductDetail() {
     if (!id) return;
     (async () => {
       setLoading(true);
-      const { data } = await supabase.from('products').select('*').eq('id', id).single();
-      setProduct((data as Product) ?? null);
+      setActiveMedia(0);
+      setTab('description');
+      const { data } = await supabase.from('products').select('*, category:categories(*), brand:brands(*)').eq('id', id).single();
+      const p = (data as Product) ?? null;
+      setProduct(p);
       await loadReviews();
+
+      if (p) {
+        const { data: rel } = await supabase
+          .from('products')
+          .select('*, category:categories(*), brand:brands(*)')
+          .eq('category_id', p.category_id)
+          .eq('is_active', true)
+          .neq('id', p.id)
+          .limit(5);
+        setRelated((rel as Product[]) ?? []);
+      }
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -60,7 +89,11 @@ export default function ProductDetail() {
   }
 
   const outOfStock = product.stock_quantity <= 0;
+  const discountPercent = computeDiscountPercent(product);
+  const hasDiscount = discountPercent > 0;
   const avgRating = reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
+  const media = [...product.image_urls, ...(product.video_url ? [product.video_url] : [])];
+  const isVideoActive = product.video_url && activeMedia === media.length - 1;
 
   const handleAddToCart = async () => {
     if (!session) return navigate('/login', { state: { from: `/product/${product.id}` } });
@@ -72,6 +105,11 @@ export default function ProductDetail() {
     if (!session) return navigate('/login', { state: { from: `/product/${product.id}` } });
     await addToCart(product.id, qty);
     navigate('/cart');
+  };
+
+  const handleWishlist = async () => {
+    if (!session) return navigate('/login', { state: { from: `/product/${product.id}` } });
+    await toggleWishlist(product.id);
   };
 
   const submitReview = async () => {
@@ -98,25 +136,33 @@ export default function ProductDetail() {
         {/* Gallery */}
         <div>
           <div className="card-surface aspect-square overflow-hidden bg-surface-container-low">
-            {product.image_urls?.length ? (
-              <img src={product.image_urls[activeImage]} alt={product.model_name} className="h-full w-full object-cover" />
+            {isVideoActive ? (
+              <video src={product.video_url} controls className="h-full w-full object-cover" />
+            ) : media[activeMedia] ? (
+              <img src={media[activeMedia]} alt={product.name} className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full items-center justify-center text-outline">
-                <span className="material-symbols-outlined !text-5xl">smartphone</span>
+                <span className="material-symbols-outlined !text-5xl">category</span>
               </div>
             )}
           </div>
-          {product.image_urls?.length > 1 && (
+          {media.length > 1 && (
             <div className="mt-3 flex gap-2">
-              {product.image_urls.map((url, i) => (
+              {media.map((m, i) => (
                 <button
-                  key={url + i}
-                  onClick={() => setActiveImage(i)}
-                  className={`h-16 w-16 overflow-hidden rounded-md border-2 ${
-                    activeImage === i ? 'border-primary' : 'border-border-soft'
+                  key={m + i}
+                  onClick={() => setActiveMedia(i)}
+                  className={`relative h-16 w-16 overflow-hidden rounded-md border-2 ${
+                    activeMedia === i ? 'border-primary' : 'border-border-soft'
                   }`}
                 >
-                  <img src={url} alt="" className="h-full w-full object-cover" />
+                  {product.video_url && i === media.length - 1 ? (
+                    <div className="flex h-full w-full items-center justify-center bg-secondary">
+                      <span className="material-symbols-outlined text-white">play_circle</span>
+                    </div>
+                  ) : (
+                    <img src={m} alt="" className="h-full w-full object-cover" />
+                  )}
                 </button>
               ))}
             </div>
@@ -125,8 +171,20 @@ export default function ProductDetail() {
 
         {/* Info */}
         <div>
-          <p className="eyebrow">{product.brand}</p>
-          <h1 className="mt-1 text-headline-lg text-on-surface">{product.model_name}</h1>
+          <div className="flex items-start justify-between">
+            <div>
+              {product.brand && <p className="eyebrow">{product.brand.name}</p>}
+              <h1 className="mt-1 text-headline-lg text-on-surface">{product.name}</h1>
+            </div>
+            <button onClick={handleWishlist} className="flex h-10 w-10 items-center justify-center rounded-full border border-border-soft bg-white">
+              <span
+                className={`material-symbols-outlined ${isWishlisted(product.id) ? 'text-error' : 'text-on-surface-variant'}`}
+                style={{ fontVariationSettings: `'FILL' ${isWishlisted(product.id) ? 1 : 0}` }}
+              >
+                favorite
+              </span>
+            </button>
+          </div>
 
           {reviews.length > 0 && (
             <div className="mt-2 flex items-center gap-1.5 text-label-sm text-on-surface-variant">
@@ -143,16 +201,36 @@ export default function ProductDetail() {
             </div>
           )}
 
-          <p className="mt-md text-display-lg !text-[32px] text-primary-deep">{formatPrice(product.price)}</p>
-
-          <div className="mt-5 flex flex-wrap gap-2">
-            <span className="spec-chip">RAM: {product.ram_gb}GB</span>
-            <span className="spec-chip">Storage: {product.storage_gb}GB</span>
-            {product.color && <span className="spec-chip">Color: {product.color}</span>}
-            {product.processor && <span className="spec-chip">Chipset: {product.processor}</span>}
+          <div className="mt-md flex items-baseline gap-3">
+            <p className="text-display-lg !text-[32px] text-primary-deep">{formatPrice(product.price)}</p>
+            {hasDiscount && (
+              <>
+                <p className="text-headline-md !text-lg text-outline line-through">{formatPrice(product.compare_at_price)}</p>
+                <span className="rounded-full bg-error/10 px-2.5 py-1 text-caption font-semibold text-error">
+                  -{discountPercent}% OFF
+                </span>
+              </>
+            )}
           </div>
 
-          {product.description && <p className="mt-5 text-body-md leading-relaxed text-on-surface-variant">{product.description}</p>}
+          {product.compatible_models?.length > 0 && (
+            <div className="mt-4">
+              <p className="mb-1.5 text-caption font-semibold uppercase tracking-wide text-on-surface-variant">Available Models</p>
+              <div className="flex flex-wrap gap-1.5">
+                {product.compatible_models.map((m) => (
+                  <span key={m} className="spec-chip">
+                    {m}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {product.material && <span className="spec-chip">Material: {product.material}</span>}
+            {product.finish && <span className="spec-chip">Finish: {product.finish}</span>}
+            {product.color && <span className="spec-chip">Color: {product.color}</span>}
+          </div>
 
           <p className={`mt-5 flex items-center gap-1.5 text-label-sm font-semibold ${outOfStock ? 'text-error' : 'text-primary'}`}>
             <span className="material-symbols-outlined !text-base">{outOfStock ? 'cancel' : 'check_circle'}</span>
@@ -179,21 +257,67 @@ export default function ProductDetail() {
           <div className="mt-6 flex gap-3">
             <button onClick={handleAddToCart} disabled={outOfStock} className="btn-secondary flex-1">
               <span className="material-symbols-outlined !text-base">add_shopping_cart</span>
-              Add to cart
+              Add to Cart
             </button>
             <button onClick={handleBuyNow} disabled={outOfStock} className="btn-primary flex-1 shadow-3">
-              <span className="material-symbols-outlined !text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
-                lock
-              </span>
-              Buy now
+              Buy Now
             </button>
           </div>
+
+          {product.features?.length > 0 && (
+            <div className="mt-6 rounded-lg border border-border-soft bg-surface-container-low p-4">
+              <p className="mb-2 text-label-sm font-semibold text-on-surface">Features</p>
+              <ul className="space-y-1.5">
+                {product.features.map((f) => (
+                  <li key={f} className="flex items-start gap-1.5 text-body-md text-on-surface-variant">
+                    <span className="material-symbols-outlined !text-base text-primary">check</span>
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {product.whats_included?.length > 0 && (
+            <div className="mt-3">
+              <p className="mb-1.5 text-label-sm font-semibold text-on-surface">What's Included</p>
+              <p className="text-body-md text-on-surface-variant">{product.whats_included.join(' · ')}</p>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Description / Delivery / Returns tabs */}
+      <section className="mt-xl max-w-3xl">
+        <div className="flex border-b border-border-soft">
+          {(
+            [
+              ['description', 'Description'],
+              ['delivery', 'Delivery Information'],
+              ['returns', 'Return Policy'],
+            ] as [Tab, string][]
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`border-b-2 px-4 py-3 text-label-sm transition ${
+                tab === key ? 'border-primary font-semibold text-primary-deep' : 'border-transparent text-on-surface-variant'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="py-5 text-body-md leading-relaxed text-on-surface-variant">
+          {tab === 'description' && (product.description || 'No description provided.')}
+          {tab === 'delivery' && product.delivery_info}
+          {tab === 'returns' && product.return_policy}
+        </div>
+      </section>
+
       {/* Reviews */}
       <section className="mt-xl max-w-2xl">
-        <h2 className="text-headline-lg !text-2xl text-on-surface">Customer feedback</h2>
+        <h2 className="text-headline-lg !text-2xl text-on-surface">Customer Reviews</h2>
 
         <div className="mt-5 card-surface p-5">
           <p className="mb-2 text-label-sm text-on-surface-variant">Leave a review</p>
@@ -211,7 +335,7 @@ export default function ProductDetail() {
             onChange={(e) => setReviewText(e.target.value)}
             className="input-field resize-none bg-white"
             rows={3}
-            placeholder="How's the phone treating you?"
+            placeholder="How's the product treating you?"
           />
           <button onClick={submitReview} disabled={submittingReview} className="btn-primary mt-3">
             {submittingReview ? 'Posting…' : 'Post review'}
@@ -237,6 +361,23 @@ export default function ProductDetail() {
           ))}
         </div>
       </section>
+
+      {/* Related products */}
+      {related.length > 0 && (
+        <section className="mt-xl">
+          <h2 className="mb-md text-headline-lg !text-2xl text-on-surface">You may also like</h2>
+          <div className="grid grid-cols-2 gap-md sm:grid-cols-3 lg:grid-cols-5">
+            {related.map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <Link to={`/shop`} className="mt-lg inline-flex items-center gap-1 text-label-sm text-primary hover:underline">
+        <span className="material-symbols-outlined !text-base">arrow_back</span>
+        Back to shop
+      </Link>
     </div>
   );
 }

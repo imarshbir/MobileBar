@@ -62,8 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // maybeSingle(), not single(): a signed-in auth.users row with no
+  // matching profiles row yet is a real, recoverable state (e.g. right
+  // after an account was created outside the app's own register flow),
+  // not an error condition. single() throws a 406 the instant that
+  // happens; maybeSingle() just resolves to null, which the app already
+  // shows a loading/incomplete-profile state for.
   const loadProfile = async (userId: string) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
     setProfile((data as Profile) ?? null);
   };
 

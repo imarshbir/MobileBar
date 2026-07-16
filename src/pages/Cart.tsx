@@ -52,23 +52,23 @@ export default function Cart() {
               </div>
               <div className="flex-1">
                 <p className="text-label-sm font-semibold text-on-surface">
-                  {item.product?.brand} {item.product?.model_name}
+                  {item.product?.name}
                 </p>
                 <p className="mt-1 text-caption text-on-surface-variant">
-                  {item.product?.ram_gb}GB / {item.product?.storage_gb}GB
+                  {item.product?.compatible_models?.slice(0, 2).join(', ') || item.product?.color}
                 </p>
-                <p className="mt-1 font-semibold text-primary-deep">{formatPrice(item.product?.price ?? 0)}</p>
+                <p className="mt-1 font-semibold text-primary-deep">{formatPrice(item.product?.sale_price ?? 0)}</p>
               </div>
               <div className="flex items-center rounded-lg border border-border-soft">
-                <button onClick={() => updateQuantity(item.id, item.quantity - 1)} className="px-2.5 py-1.5 text-on-surface-variant hover:text-primary">
+                <button onClick={() => updateQuantity(item.product_id, item.quantity - 1)} className="px-2.5 py-1.5 text-on-surface-variant hover:text-primary">
                   −
                 </button>
                 <span className="w-7 text-center text-label-sm">{item.quantity}</span>
-                <button onClick={() => updateQuantity(item.id, item.quantity + 1)} className="px-2.5 py-1.5 text-on-surface-variant hover:text-primary">
+                <button onClick={() => updateQuantity(item.product_id, item.quantity + 1)} className="px-2.5 py-1.5 text-on-surface-variant hover:text-primary">
                   +
                 </button>
               </div>
-              <button onClick={() => removeFromCart(item.id)} className="text-outline hover:text-error">
+              <button onClick={() => removeFromCart(item.product_id)} className="text-outline hover:text-error">
                 <span className="material-symbols-outlined">delete</span>
               </button>
             </div>
