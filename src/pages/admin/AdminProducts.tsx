@@ -260,8 +260,15 @@ export default function AdminProducts() {
                     <td className="px-4 py-3">{p.stock_quantity}</td>
                     <td className="px-4 py-3">
                       <button
-                        onClick={() => toggleActive(p)}
-                        className={`rounded-full px-3 py-1 text-caption font-semibold ${
+                        onClick={() => {
+                          // Hiding is the risky direction (removes it from
+                          // the storefront) — confirm before flipping that
+                          // way. Re-showing needs no confirmation.
+                          if (p.is_active && !confirm(`Hide "${p.name}" from the storefront?`)) return;
+                          toggleActive(p);
+                        }}
+                        title={p.is_active ? 'Click to hide this product from customers' : 'Click to make this product visible again'}
+                        className={`rounded-full px-3 py-1 text-caption font-semibold ring-1 ring-inset ring-transparent transition hover:ring-current ${
                           p.is_active ? badge.cls : 'bg-surface-container-low text-on-surface-variant'
                         }`}
                       >
@@ -425,6 +432,7 @@ export default function AdminProducts() {
                   ['is_new_arrival', 'New Arrival'],
                   ['is_best_seller', 'Best Seller'],
                   ['is_featured', 'Featured'],
+                  ['is_active', 'Active (visible to customers)'],
                 ] as const
               ).map(([key, label]) => (
                 <label key={key} className="flex items-center gap-2 text-label-sm text-on-surface">
