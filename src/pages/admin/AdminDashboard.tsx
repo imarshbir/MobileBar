@@ -41,7 +41,7 @@ export default function AdminDashboard() {
       setStats({
         totalProducts: totalProducts ?? 0,
         totalOrders: orderRows.length,
-        pendingOrders: orderRows.filter((o) => o.status === 'pending').length,
+        pendingOrders: orderRows.filter((o) => o.status === 'confirmed').length,
         revenue: orderRows.filter((o) => o.status !== 'cancelled').reduce((s, o) => s + Number(o.total_price), 0),
       });
 

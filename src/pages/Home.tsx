@@ -42,6 +42,12 @@ export default function Home() {
   const [newArrivals, setNewArrivals] = useState<Product[]>([]);
   const [bestSellers, setBestSellers] = useState<Product[]>([]);
   const [featured, setFeatured] = useState<Product[]>([]);
+  // Catch-all: any active product that isn't flagged New Arrival, Best
+  // Seller, or Featured never showed up anywhere on the homepage before
+  // this — the three rows above only ever query products WHERE that
+  // specific flag = true, so an otherwise-ordinary listing with none of
+  // them checked had no code path that would ever render it here.
+  const [moreProducts, setMoreProducts] = useState<Product[]>([]);
   const [searchResults, setSearchResults] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -61,7 +67,7 @@ export default function Home() {
         return;
       }
 
-      const [{ data: cats }, { data: brs }, { data: newArr }, { data: best }, { data: feat }] = await Promise.all([
+      const [{ data: cats }, { data: brs }, { data: newArr }, { data: best }, { data: feat }, { data: more }] = await Promise.all([
         supabase.from('categories').select('*').eq('is_active', true).order('display_order'),
         supabase.from('brands').select('*').eq('is_active', true).order('display_order'),
         supabase
@@ -82,6 +88,15 @@ export default function Home() {
           .eq('is_active', true)
           .eq('is_featured', true)
           .limit(10),
+        supabase
+          .from('products')
+          .select('*, category:categories(*), brand:brands(*)')
+          .eq('is_active', true)
+          .eq('is_new_arrival', false)
+          .eq('is_best_seller', false)
+          .eq('is_featured', false)
+          .order('created_at', { ascending: false })
+          .limit(20),
       ]);
 
       if (!cancelled) {
@@ -90,6 +105,7 @@ export default function Home() {
         setNewArrivals((newArr as Product[]) ?? []);
         setBestSellers((best as Product[]) ?? []);
         setFeatured((feat as Product[]) ?? []);
+        setMoreProducts((more as Product[]) ?? []);
       }
       setLoading(false);
     })();
@@ -207,10 +223,15 @@ export default function Home() {
       <ProductRow title="New Arrivals" icon="new_releases" products={newArrivals} />
       <ProductRow title="Best Sellers" icon="local_fire_department" products={bestSellers} />
       <ProductRow title="Featured Picks" icon="star" products={featured} />
+      <ProductRow title="More to Explore" icon="apps" products={moreProducts} />
 
-      {filter === 'best_seller' && bestSellers.length === 0 && newArrivals.length === 0 && (
-        <div className="container-page py-24 text-center text-on-surface-variant">No products yet — check back soon.</div>
-      )}
+      {filter === 'best_seller' &&
+        bestSellers.length === 0 &&
+        newArrivals.length === 0 &&
+        featured.length === 0 &&
+        moreProducts.length === 0 && (
+          <div className="container-page py-24 text-center text-on-surface-variant">No products yet — check back soon.</div>
+        )}
     </div>
   );
 }

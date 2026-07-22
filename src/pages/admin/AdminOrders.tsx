@@ -8,7 +8,7 @@ import { exportOrdersToExcel } from '@/utils/exportOrders';
 const formatPrice = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
-const STATUSES: OrderStatus[] = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'];
+const STATUSES: OrderStatus[] = ['confirmed', 'shipped', 'delivered', 'cancelled'];
 
 export default function AdminOrders() {
   const { push } = useToast();
@@ -92,17 +92,39 @@ export default function AdminOrders() {
                     Qty {o.quantity} · Unit {formatPrice(o.unit_price)} · Total {formatPrice(o.total_price)}
                   </p>
                 </div>
-                <select
-                  value={o.status}
-                  onChange={(e) => updateStatus(o.id, e.target.value as OrderStatus)}
-                  className="input-field w-auto bg-white !py-1.5 text-caption"
-                >
-                  {STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {s[0].toUpperCase() + s.slice(1)}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-caption font-semibold ${
+                      o.payment_status === 'paid'
+                        ? 'bg-primary/10 text-primary'
+                        : o.payment_status === 'refunded'
+                        ? 'bg-secondary-container text-on-secondary-container'
+                        : o.payment_status === 'failed'
+                        ? 'bg-error-container text-on-error-container'
+                        : 'bg-amber-50 text-amber-700'
+                    }`}
+                    title={`Payment method: ${o.payment_method || 'unknown'}`}
+                  >
+                    <span className="material-symbols-outlined !text-sm">
+                      {o.payment_method === 'razorpay' ? 'credit_card' : 'payments'}
+                    </span>
+                    {o.payment_method === 'razorpay' ? 'Paid Online' : o.payment_method === 'cod' ? 'Cash on Delivery' : o.payment_method || '—'}
+                    {o.payment_status === 'pending' && o.payment_method === 'cod' ? ' · Payment Pending' : ''}
+                    {o.payment_status === 'refunded' ? ' · Refunded' : ''}
+                    {o.payment_status === 'failed' ? ' · Failed' : ''}
+                  </span>
+                  <select
+                    value={o.status}
+                    onChange={(e) => updateStatus(o.id, e.target.value as OrderStatus)}
+                    className="input-field w-auto bg-white !py-1.5 text-caption"
+                  >
+                    {STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s[0].toUpperCase() + s.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border-soft pt-4 text-body-md sm:grid-cols-3">

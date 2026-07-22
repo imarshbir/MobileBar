@@ -9,7 +9,6 @@ const formatPrice = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
 const STATUS_STYLES: Record<string, string> = {
-  pending: 'text-amber-700 bg-amber-50 border border-amber-200',
   confirmed: 'text-primary bg-primary/10 border border-primary/20',
   shipped: 'text-primary bg-primary/10 border border-primary/20',
   delivered: 'text-on-surface-variant bg-surface-container-low border border-border-soft',

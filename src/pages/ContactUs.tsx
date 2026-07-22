@@ -76,9 +76,7 @@ export default function ContactUs() {
           <h2 className="text-headline-md !text-lg text-on-surface">Store Address</h2>
           <p className="mt-2 flex items-start gap-2 text-body-md text-on-surface-variant">
             <span className="material-symbols-outlined !text-lg text-primary">location_on</span>
-            {/* Placeholder — the PDF listed "Store Address" as a field to fill in but didn't
-                include the actual address text. Replace this with the real address. */}
-            Store address to be added — update this in src/pages/ContactUs.tsx
+          Mobile Bar, Opp Baba Dariya Di Hatti, Sahnewal, Ludhiana, Punjab - 141120
           </p>
         </div>
 

@@ -14,6 +14,26 @@ interface CouponPreview {
   message: string;
 }
 
+declare global {
+  interface Window {
+    Razorpay: new (options: Record<string, unknown>) => { open: () => void };
+  }
+}
+
+// Razorpay's Checkout.js is only needed on this one page, so it's
+// loaded on demand rather than as a static <script> tag in index.html —
+// nobody browsing the storefront should have to download it.
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (window.Razorpay) return resolve(true);
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 export default function Checkout() {
   const { profile } = useAuth();
   const { items, totalPrice, clearCart } = useCart();
@@ -23,17 +43,15 @@ export default function Checkout() {
   const [couponInput, setCouponInput] = useState('');
   const [couponPreview, setCouponPreview] = useState<CouponPreview | null>(null);
   const [checkingCoupon, setCheckingCoupon] = useState(false);
-  const [placing, setPlacing] = useState(false);
+  const [payingOnline, setPayingOnline] = useState(false);
+  const [placingCod, setPlacingCod] = useState(false);
 
   const missingMobile = !profile?.mobile_number;
+  const appliedCouponCode = couponPreview?.is_valid ? couponInput.trim() : null;
 
   const handleCheckCoupon = async () => {
     if (!couponInput.trim()) return;
     setCheckingCoupon(true);
-    // validate_coupon() is a read-only preview — it never locks a row or
-    // increments usage. The real, authoritative check (and the only
-    // place a coupon actually gets consumed) happens inside checkout()
-    // below, so a stale preview here can never cause an incorrect charge.
     const { data, error } = await supabase.rpc('validate_coupon', {
       p_code: couponInput.trim(),
       p_cart_total: totalPrice,
@@ -46,24 +64,94 @@ export default function Checkout() {
     setCouponPreview(data[0] as CouponPreview);
   };
 
-  const handlePlaceOrder = async () => {
+  // Online payment: UPI, cards, netbanking, wallets — all handled
+  // inside Razorpay's own Checkout.js sheet, we never see raw
+  // card/bank details. The order isn't created until payment is
+  // confirmed — see verify-razorpay-payment / razorpay-webhook.
+  const handlePayOnline = async () => {
     if (missingMobile) {
       push('Add a mobile number to your profile before checking out — delivery needs a contact number.', 'error');
       return;
     }
-    setPlacing(true);
 
-    // One atomic call: the server re-reads the cart itself, locks every
-    // affected product row, validates stock, applies the coupon exactly
-    // once against the true cart total, and creates all order lines
-    // together or not at all. Nothing here can be tampered with from
-    // the client — price, stock, and coupon math are all authoritative
-    // on the server side.
-    const { data, error } = await supabase.rpc('checkout', {
-      p_coupon_code: couponPreview?.is_valid ? couponInput.trim() : null,
-    });
+    setPayingOnline(true);
+    try {
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        push('Could not load the payment window. Check your connection and try again.', 'error');
+        return;
+      }
 
-    setPlacing(false);
+      const { data: session } = await supabase.auth.getSession();
+      const accessToken = session.session?.access_token;
+      if (!accessToken) {
+        push('Please sign in again to continue.', 'error');
+        return;
+      }
+
+      const { data: orderData, error: orderError } = await supabase.functions.invoke('create-razorpay-order', {
+        body: { coupon_code: appliedCouponCode },
+      });
+      if (orderError || orderData?.error) {
+        push(orderData?.error || 'Could not start payment. Please try again.', 'error');
+        return;
+      }
+
+      const razorpay = new window.Razorpay({
+        key: orderData.key_id,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        order_id: orderData.razorpay_order_id,
+        name: 'Mobile Bar',
+        description: `${items.length} item${items.length !== 1 ? 's' : ''}`,
+        prefill: {
+          name: profile?.full_name,
+          email: profile?.email,
+          contact: profile?.mobile_number ?? undefined,
+        },
+        theme: { color: '#065F46' },
+        handler: async (response: {
+          razorpay_order_id: string;
+          razorpay_payment_id: string;
+          razorpay_signature: string;
+        }) => {
+          const { data: verifyData, error: verifyError } = await supabase.functions.invoke('verify-razorpay-payment', {
+            body: response,
+          });
+          if (verifyError || verifyData?.error) {
+            push(verifyData?.error || 'Payment could not be verified. If money was deducted, it will be refunded.', 'error');
+            return;
+          }
+          push('Payment successful — order confirmed!', 'success');
+          await clearCart();
+          navigate('/profile');
+        },
+        modal: {
+          ondismiss: () => {
+            setPayingOnline(false);
+          },
+        },
+      });
+
+      razorpay.open();
+    } catch {
+      push('Could not start payment. Please try again.', 'error');
+    } finally {
+      setPayingOnline(false);
+    }
+  };
+
+  // Cash on Delivery: still goes through the existing checkout() RPC,
+  // which creates the order immediately (now as "confirmed", with
+  // payment_status "pending" until cash is collected at delivery).
+  const handleCod = async () => {
+    if (missingMobile) {
+      push('Add a mobile number to your profile before checking out — delivery needs a contact number.', 'error');
+      return;
+    }
+    setPlacingCod(true);
+    const { data, error } = await supabase.rpc('checkout', { p_coupon_code: appliedCouponCode });
+    setPlacingCod(false);
 
     if (error) {
       push(error.message || 'Could not place your order. Please try again.', 'error');
@@ -73,8 +161,7 @@ export default function Checkout() {
       push('Your cart may have already been checked out. Please refresh and try again.', 'error');
       return;
     }
-
-    push('Order placed! Track it from your profile.', 'success');
+    push('Order placed and confirmed!', 'success');
     await clearCart();
     navigate('/profile');
   };
@@ -88,7 +175,7 @@ export default function Checkout() {
   }
 
   const discount = couponPreview?.is_valid ? couponPreview.discount_amount : 0;
-  const grandTotal = Math.max(0, totalPrice - discount) * 1.18; // GST preview only — server computes the authoritative figure
+  const grandTotal = Math.max(0, totalPrice - discount) * 1.18; // preview only — server computes the authoritative figure
 
   return (
     <div className="container-page max-w-2xl py-xl">
@@ -167,14 +254,23 @@ export default function Checkout() {
         </div>
       </div>
 
-      <button onClick={handlePlaceOrder} disabled={placing || missingMobile} className="btn-primary mt-6 w-full !py-4 shadow-3">
+      <button
+        onClick={handlePayOnline}
+        disabled={payingOnline || placingCod}
+        className="btn-primary mt-6 w-full !py-4 shadow-3"
+      >
         <span className="material-symbols-outlined !text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
           lock
         </span>
-        {placing ? 'Placing order…' : 'Place order'}
+        {payingOnline ? 'Opening secure payment…' : 'Pay Online (UPI / Card / Netbanking)'}
       </button>
+
+      <button onClick={handleCod} disabled={payingOnline || placingCod} className="btn-secondary mt-3 w-full !py-3.5">
+        {placingCod ? 'Placing order…' : 'Cash on Delivery'}
+      </button>
+
       <p className="mt-3 text-center text-caption text-on-surface-variant">
-        Cash on delivery. Payment gateway integration is a drop-in for launch.
+        Online payments are handled entirely by Razorpay — we never see your card or bank details.
       </p>
     </div>
   );
