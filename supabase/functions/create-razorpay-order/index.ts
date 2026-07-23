@@ -55,9 +55,12 @@ Deno.serve(async (req) => {
     // compute_cart_total() is the same function finalize_paid_order()
     // uses after payment succeeds — quoting the amount from here
     // guarantees it can never drift from what actually gets recorded.
+    // 'razorpay' here means: no COD surcharge, since this whole
+    // function only ever runs for the online-payment flow.
     const { data: totals, error: totalsError } = await userClient.rpc('compute_cart_total', {
       p_customer_id: user.id,
       p_coupon_code: couponCode,
+      p_payment_method: 'razorpay',
     });
     if (totalsError) {
       return json({ error: totalsError.message }, 400);

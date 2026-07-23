@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/AuthContext';
@@ -13,6 +13,17 @@ interface CouponPreview {
   discount_amount: number;
   message: string;
 }
+
+interface CartTotals {
+  subtotal: number;
+  discount: number;
+  shipping: number;
+  total: number;
+  coupon_id: string | null;
+  coupon_code: string | null;
+}
+
+type PaymentMethod = 'razorpay' | 'cod';
 
 declare global {
   interface Window {
@@ -36,25 +47,53 @@ function loadRazorpayScript(): Promise<boolean> {
 
 export default function Checkout() {
   const { profile } = useAuth();
-  const { items, totalPrice, clearCart } = useCart();
+  const { items, clearCart } = useCart();
   const { push } = useToast();
   const navigate = useNavigate();
 
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('razorpay');
   const [couponInput, setCouponInput] = useState('');
   const [couponPreview, setCouponPreview] = useState<CouponPreview | null>(null);
   const [checkingCoupon, setCheckingCoupon] = useState(false);
+  const [totals, setTotals] = useState<CartTotals | null>(null);
+  const [loadingTotals, setLoadingTotals] = useState(true);
   const [payingOnline, setPayingOnline] = useState(false);
   const [placingCod, setPlacingCod] = useState(false);
 
   const missingMobile = !profile?.mobile_number;
   const appliedCouponCode = couponPreview?.is_valid ? couponInput.trim() : null;
 
+  // The price table always reflects exactly what compute_cart_total()
+  // on the server will charge — same function both create-razorpay-
+  // order and finalize_paid_order/checkout use — so nothing shown here
+  // can ever drift from what actually gets charged. Recomputes whenever
+  // the payment method (which changes the ₹99 COD surcharge) or the
+  // applied coupon changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingTotals(true);
+      const { data, error } = await supabase.rpc('compute_cart_total', {
+        p_customer_id: profile?.id,
+        p_coupon_code: appliedCouponCode,
+        p_payment_method: paymentMethod,
+      });
+      if (!cancelled) {
+        if (!error && data?.[0]) setTotals(data[0] as CartTotals);
+        setLoadingTotals(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.id, appliedCouponCode, paymentMethod]);
+
   const handleCheckCoupon = async () => {
-    if (!couponInput.trim()) return;
+    if (!couponInput.trim() || !totals) return;
     setCheckingCoupon(true);
     const { data, error } = await supabase.rpc('validate_coupon', {
       p_code: couponInput.trim(),
-      p_cart_total: totalPrice,
+      p_cart_total: totals.subtotal,
     });
     setCheckingCoupon(false);
     if (error || !data || data.length === 0) {
@@ -174,9 +213,6 @@ export default function Checkout() {
     );
   }
 
-  const discount = couponPreview?.is_valid ? couponPreview.discount_amount : 0;
-  const grandTotal = Math.max(0, totalPrice - discount) * 1.18; // preview only — server computes the authoritative figure
-
   return (
     <div className="container-page max-w-2xl py-xl">
       <h1 className="text-headline-lg text-on-surface">Checkout</h1>
@@ -212,6 +248,38 @@ export default function Checkout() {
         ))}
       </div>
 
+      {/* Payment method — chosen here because it affects the ₹99 COD
+          surcharge shown in the price table right below. */}
+      <div className="card-surface mt-4 p-6">
+        <h2 className="text-headline-md !text-base text-on-surface">Payment method</h2>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <button
+            onClick={() => setPaymentMethod('razorpay')}
+            className={`rounded-lg border-2 px-4 py-3 text-left transition ${
+              paymentMethod === 'razorpay' ? 'border-primary bg-primary/5' : 'border-border-soft bg-white'
+            }`}
+          >
+            <span className="flex items-center gap-2 text-label-sm font-semibold text-on-surface">
+              <span className="material-symbols-outlined !text-lg text-primary">credit_card</span>
+              Pay Online
+            </span>
+            <span className="mt-1 block text-caption text-on-surface-variant">UPI / Card / Netbanking</span>
+          </button>
+          <button
+            onClick={() => setPaymentMethod('cod')}
+            className={`rounded-lg border-2 px-4 py-3 text-left transition ${
+              paymentMethod === 'cod' ? 'border-primary bg-primary/5' : 'border-border-soft bg-white'
+            }`}
+          >
+            <span className="flex items-center gap-2 text-label-sm font-semibold text-on-surface">
+              <span className="material-symbols-outlined !text-lg text-primary">payments</span>
+              Cash on Delivery
+            </span>
+            <span className="mt-1 block text-caption text-on-surface-variant">+₹99 handling charge</span>
+          </button>
+        </div>
+      </div>
+
       <div className="card-surface mt-4 p-6">
         <h2 className="text-headline-md !text-base text-on-surface">Coupon code</h2>
         <div className="mt-2 flex gap-2">
@@ -236,41 +304,78 @@ export default function Checkout() {
         )}
       </div>
 
-      <div className="card-surface mt-4 p-6">
-        <div className="flex justify-between text-body-md text-on-surface-variant">
-          <span>Subtotal</span>
-          <span>{formatPrice(totalPrice)}</span>
+      {/* Price breakdown — a real, server-verified table, not an
+          estimate: subtotal, then shipping (with the COD surcharge
+          folded in when that method is selected), then the coupon
+          discount subtracted, then the grand total. */}
+      <div className="card-surface mt-4 overflow-hidden">
+        <div className="border-b border-border-soft bg-surface-container-low px-6 py-3">
+          <h2 className="text-label-sm font-semibold uppercase tracking-wide text-on-surface-variant">Price Details</h2>
         </div>
-        {discount > 0 && (
-          <div className="mt-1 flex justify-between text-body-md text-primary">
-            <span>Coupon discount</span>
-            <span>−{formatPrice(discount)}</span>
-          </div>
+        {loadingTotals || !totals ? (
+          <div className="p-6 text-center text-body-md text-on-surface-variant">Calculating…</div>
+        ) : (
+          <table className="w-full text-body-md">
+            <tbody>
+              <tr className="border-b border-border-soft">
+                <td className="px-6 py-3 text-on-surface-variant">Order Amount</td>
+                <td className="px-6 py-3 text-right text-on-surface">{formatPrice(totals.subtotal)}</td>
+              </tr>
+              <tr className="border-b border-border-soft">
+                <td className="px-6 py-3 text-on-surface-variant">
+                  Delivery Charges
+                  {paymentMethod === 'cod' && <span className="ml-1 text-caption">(incl. ₹99 COD charge)</span>}
+                </td>
+                <td className="px-6 py-3 text-right">
+                  {totals.shipping === 0 ? (
+                    <span className="font-semibold text-primary">FREE</span>
+                  ) : (
+                    <span className="text-on-surface">+{formatPrice(totals.shipping)}</span>
+                  )}
+                </td>
+              </tr>
+              {totals.discount > 0 && (
+                <tr className="border-b border-border-soft">
+                  <td className="px-6 py-3 text-on-surface-variant">
+                    Coupon Discount {totals.coupon_code ? `(${totals.coupon_code})` : ''}
+                  </td>
+                  <td className="px-6 py-3 text-right text-primary">−{formatPrice(totals.discount)}</td>
+                </tr>
+              )}
+              <tr className="bg-surface-container-low">
+                <td className="px-6 py-4 text-headline-md !text-base font-bold text-on-surface">Total Payable</td>
+                <td className="px-6 py-4 text-right text-headline-md !text-lg font-bold text-primary-deep">
+                  {formatPrice(totals.total)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         )}
-        <p className="mt-1 text-caption text-on-surface-variant">Plus applicable GST, calculated at checkout.</p>
-        <div className="mt-3 flex justify-between border-t border-border-soft pt-3 text-headline-md !text-lg text-on-surface">
-          <span>Estimated total</span>
-          <span>{formatPrice(grandTotal)}</span>
-        </div>
+        {totals && totals.subtotal <= 799 && (
+          <p className="flex items-center gap-1.5 border-t border-border-soft px-6 py-2.5 text-caption text-on-surface-variant">
+            <span className="material-symbols-outlined !text-sm">local_shipping</span>
+            Add {formatPrice(799 - totals.subtotal + 1)} more to get free delivery.
+          </p>
+        )}
       </div>
 
-      <button
-        onClick={handlePayOnline}
-        disabled={payingOnline || placingCod}
-        className="btn-primary mt-6 w-full !py-4 shadow-3"
-      >
-        <span className="material-symbols-outlined !text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
-          lock
-        </span>
-        {payingOnline ? 'Opening secure payment…' : 'Pay Online (UPI / Card / Netbanking)'}
-      </button>
-
-      <button onClick={handleCod} disabled={payingOnline || placingCod} className="btn-secondary mt-3 w-full !py-3.5">
-        {placingCod ? 'Placing order…' : 'Cash on Delivery'}
-      </button>
+      {paymentMethod === 'razorpay' ? (
+        <button onClick={handlePayOnline} disabled={payingOnline || placingCod} className="btn-primary mt-6 w-full !py-4 shadow-3">
+          <span className="material-symbols-outlined !text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
+            lock
+          </span>
+          {payingOnline ? 'Opening secure payment…' : totals ? `Pay ${formatPrice(totals.total)}` : 'Pay Online'}
+        </button>
+      ) : (
+        <button onClick={handleCod} disabled={payingOnline || placingCod} className="btn-primary mt-6 w-full !py-4 shadow-3">
+          {placingCod ? 'Placing order…' : 'Place Order (Cash on Delivery)'}
+        </button>
+      )}
 
       <p className="mt-3 text-center text-caption text-on-surface-variant">
-        Online payments are handled entirely by Razorpay — we never see your card or bank details.
+        {paymentMethod === 'razorpay'
+          ? 'Online payments are handled entirely by Razorpay — we never see your card or bank details.'
+          : 'Pay in cash when your order is delivered.'}
       </p>
     </div>
   );

@@ -29,7 +29,6 @@ export default function Cart() {
       <div className="container-page py-24 text-center">
         <span className="material-symbols-outlined !text-4xl text-outline">shopping_bag</span>
         <p className="mt-2 text-headline-md text-on-surface">Your cart is empty.</p>
-        <p className="mt-1 text-body-md text-on-surface-variant">Add a phone to get started.</p>
         <Link to="/" className="btn-primary mt-4 inline-flex">
           Browse phones
         </Link>
@@ -51,9 +50,7 @@ export default function Cart() {
                 )}
               </div>
               <div className="flex-1">
-                <p className="text-label-sm font-semibold text-on-surface">
-                  {item.product?.name}
-                </p>
+                <p className="text-label-sm font-semibold text-on-surface">{item.product?.name}</p>
                 <p className="mt-1 text-caption text-on-surface-variant">
                   {item.product?.compatible_models?.slice(0, 2).join(', ') || item.product?.color}
                 </p>
@@ -81,14 +78,9 @@ export default function Cart() {
             <span>Subtotal</span>
             <span>{formatPrice(totalPrice)}</span>
           </div>
-          <div className="mt-1 flex justify-between text-body-md text-on-surface-variant">
-            <span>Shipping</span>
-            <span className="text-primary">Free</span>
-          </div>
-          <div className="mt-3 flex justify-between border-t border-border-soft pt-3 text-headline-md !text-lg text-on-surface">
-            <span>Total</span>
-            <span>{formatPrice(totalPrice)}</span>
-          </div>
+          <p className="mt-1 text-caption text-on-surface-variant">
+            Delivery charges (free above ₹799) are calculated on the next step.
+          </p>
           <Link to="/checkout" className="btn-primary mt-5 w-full shadow-3">
             <span className="material-symbols-outlined !text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
               lock
